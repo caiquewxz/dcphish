@@ -72,9 +72,11 @@ The orchestrator prints the public link (and a shortened one as a bonus):
 
 ## 🎯 The kill chain
 
+> 📱 **Mandatory:** the victim **must be on mobile** for the hijack — the Discord remote-auth approval screen only exists in the **Discord mobile app**. The portal itself can be opened from any device (desktop, tablet, whatever), but the moment the victim authorizes, it happens on their **phone**.
+
 1. Victim opens the link → game portal → **"🎮 Continuar com Discord"**
 2. Portal runs the remote-auth handshake and serves the QR **and** a direct auth link (Android `intent://` → Chrome → Discord app)
-3. Victim approves in the Discord app → portal receives the ticket
+3. **On mobile**, the victim approves in the Discord app → portal receives the ticket
 4. **If Discord demands captcha** (flagged IP): console prints
    `[captcha] resolva em <url>/captcha/<sid>` — open it, solve the hCaptcha, done
 5. Token captured → `tokens.txt` + linked to the victim record in `victims.json`
