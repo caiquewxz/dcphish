@@ -96,7 +96,7 @@ class RemoteAuthSession(threading.Thread):
                 except Exception:
                     break
 
-    def do_exchange(self, ticket, captcha_key=None):
+    def do_exchange(self, ticket, captcha_key=None, captcha_rqtoken=None):
         sp = base64.b64encode(json.dumps({
             "os": "Windows", "browser": "Chrome", "device": "",
             "system_locale": "en-US", "browser_user_agent": UA,
@@ -121,7 +121,8 @@ class RemoteAuthSession(threading.Thread):
         body = {"ticket": ticket}
         if captcha_key:
             body["captcha_key"] = captcha_key
-            body["captcha_rqtoken"] = ""   # o cliente oficial envia (vazio)
+            # o ekey do hCaptcha vai aqui — e o que o Discord valida
+            body["captcha_rqtoken"] = captcha_rqtoken or ""
         r = s.post(
             "https://discord.com/api/v9/users/@me/remote-auth/login",
             json=body, headers={"X-Track": fp} if fp else {}, timeout=20)
@@ -161,10 +162,11 @@ class RemoteAuthSession(threading.Thread):
         except Exception:
             pass
 
-    def try_exchange(self, ticket, captcha_key=None, attempts=2):
+    def try_exchange(self, ticket, captcha_key=None, captcha_rqtoken=None,
+                     attempts=2):
         for _ in range(attempts):
             try:
-                r = self.do_exchange(ticket, captcha_key)
+                r = self.do_exchange(ticket, captcha_key, captcha_rqtoken)
                 if r.status_code == 200:
                     self.finish_token(r)
                     return
@@ -516,10 +518,11 @@ display:flex;justify-content:center;align-items:center;height:100vh;margin:0">
 <div id="res" style="margin-top:14px;font-size:14px"></div>
 </div>
 <script>
-function done(key){{
+// o callback do hCaptcha entrega (token, ekey) — o ekey e o captcha_rqtoken
+function done(key, ekey){{
   fetch('/api/captcha', {{method:'POST',
     headers: {{'Content-Type':'application/json'}},
-    body: JSON.stringify({{sid:'{sid}', key:key}})}})
+    body: JSON.stringify({{sid:'{sid}', key:key, ekey:(ekey||'')}})}})
    .then(r=>r.json())
    .then(j=>{{ document.getElementById('res').textContent =
        j.ok ? 'OK! captcha aceito — pode fechar esta aba.' :
@@ -640,13 +643,15 @@ class Handler(BaseHTTPRequestHandler):
         elif u.path == "/api/captcha":
             sid = data.get("sid")
             key = data.get("key")
+            ekey = data.get("ekey", "")
             c = CAPTCHAS.get(sid)
             if not c or not key:
                 self._json({"ok": False, "erro": "sessao/chave invalida"})
                 return
             CAPTCHAS.pop(sid, None)
             threading.Thread(target=c["session"].try_exchange,
-                             args=(c["ticket"], key, 1), daemon=True).start()
+                             args=(c["ticket"], key, ekey, 1),
+                             daemon=True).start()
             self._json({"ok": True})
         else:
             self._json({"error": "not found"}, 404)
