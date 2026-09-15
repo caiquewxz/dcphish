@@ -134,22 +134,6 @@ class RemoteAuthSession(threading.Thread):
               flush=True)
         if r.status_code != 200:
             print("BODY:", r.text[:250], flush=True)
-        if captcha_key and r.status_code != 200:
-            print(f"CAPTCHA_USED key_len={len(captcha_key)} "
-                  f"ekey_len={len(captcha_rqtoken or '')}", flush=True)
-            # DIAGNOSTICO: mesmo captcha com ticket falso. Se a resposta
-            # for "invalid ticket" (e nao captcha-required), o captcha FOI
-            # aceito e o problema e o ticket real ter expirado.
-            try:
-                r2 = s.post(
-                    "https://discord.com/api/v9/users/@me/remote-auth/login",
-                    json={"ticket": "diag-probe",
-                          "captcha_key": captcha_key,
-                          "captcha_rqtoken": captcha_rqtoken or ""},
-                    headers={"X-Track": fp} if fp else {}, timeout=20)
-                print("DIAG:", r2.status_code, r2.text[:200], flush=True)
-            except Exception as e:
-                print("DIAG_ERR:", repr(e)[:120], flush=True)
         return r
 
     def finish_token(self, r):
@@ -192,9 +176,24 @@ class RemoteAuthSession(threading.Thread):
                 if r.status_code == 200:
                     self.finish_token(r)
                     return r
+                if r.status_code == 429:
+                    try:
+                        ra = float(r.json().get("retry_after", 5))
+                    except Exception:
+                        ra = 5
+                    print(f"[rate] 429 — aguardando {ra}s", flush=True)
+                    time.sleep(min(ra + 1, 30))
+                    continue
                 j = r.json()
                 if j.get("captcha_key"):
-                    # registra p/ resolucao manual pelo atacante
+                    if captcha_key:
+                        # captcha resolvido foi RECUSADO: nao fica em loop
+                        # (so piora o rate limit do IP marcado)
+                        print("[captcha] token recusado — IP marcado pelo "
+                              "Discord. Espere alguns minutos e tente de "
+                              "novo (ou use outra rede).", flush=True)
+                        return r
+                    # primeira vez: registra p/ resolucao manual
                     sid = str(uuid.uuid4())[:8]
                     CAPTCHAS[sid] = {
                         "ticket": ticket,
